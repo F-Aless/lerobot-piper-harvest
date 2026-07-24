@@ -113,6 +113,18 @@ class Robot(abc.ABC):
         pass
 
     @property
+    def joint_limits_deg(self) -> tuple[list[float], list[float]] | None:
+        """Public joint limits in degrees, as ``(lower_bounds, upper_bounds)``.
+
+        Returned shape: two parallel lists of length ``N_joints``.
+
+        Default: ``None`` for robots whose SDK does not expose introspectable
+        limits or that have no canonical degree-space (e.g. mobile bases).
+        Subclasses with a real arm should override this.
+        """
+        return None
+
+    @property
     @abc.abstractmethod
     def is_connected(self) -> bool:
         """

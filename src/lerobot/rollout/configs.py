@@ -189,6 +189,74 @@ class DAggerStrategyConfig(RolloutStrategyConfig):
             raise ValueError(f"DAgger input_device must be 'keyboard' or 'pedal', got '{self.input_device}'")
 
 
+@RolloutStrategyConfig.register_subclass("dagger_cycle")
+@dataclass
+class DAggerCycleStrategyConfig(DAggerStrategyConfig):
+    """Single-key DAgger cycle for Piper + SO-101 7-DoF leader.
+
+    Manual-episode variant of :class:`DAggerStrategyConfig`.  A single
+    ``cycle_key`` walks a three-state ring while an episode is recorded::
+
+        AUTONOMOUS --(cycle)--> PAUSED --(cycle)--> CORRECTING --(cycle)--> AUTONOMOUS
+        qp policy drives,       leader arm slides    human teleop,
+        recording               to follower pose     torque off, recording
+        intervention=False      (no recording)       intervention=True
+
+    Episode boundaries are manual (no size/time rotation):
+
+    * ``save_key``    — from STANDBY: start the policy (begin an episode);
+                        while recording: save the episode, return home, STANDBY.
+    * ``discard_key`` — drop the in-progress episode, return home, STANDBY.
+    * ESC             — stop the session.
+
+    Both the autonomous (qp-smoothed policy) and the correction (teleop) frames
+    land in the same episode; corrections are tagged ``intervention=True``.
+    Pair with ``--inference.type=qp_sync`` so the synchronous chunk inference is
+    QP smoothed and its on-chunk-boundary pauses are naturally excluded from the
+    fixed-fps dataset (frames are stamped by index, not wall clock).  Keyboard
+    only (``input_device`` is ignored).
+    """
+
+    # The loop ALWAYS records both autonomous (intervention=False) and correction
+    # (intervention=True) frames — it never reads this inherited flag. Keep it
+    # False so RolloutConfig does NOT force streaming_encoding: with streaming, the
+    # discard path (clear_episode_buffer -> StreamingVideoEncoder.cancel_episode
+    # mid-stream) hangs on thread joins and can hard-abort the process, leaving the
+    # cameras streaming. Manual episodes are operator-bounded, so the standard
+    # async-image-writer + encode-on-save path is both safe and fast enough.
+    record_autonomous: bool = False
+
+    # Single key that advances AUTONOMOUS -> PAUSED -> CORRECTING -> AUTONOMOUS.
+    cycle_key: str = "space"
+    # From STANDBY: start the policy. While recording: save episode + go home.
+    save_key: str = "s"
+    # Discard the in-progress episode + go home.
+    discard_key: str = "c"
+    # End the session cleanly: saved episodes are kept and the dataset is
+    # finalized; any unsaved in-progress episode is dropped. ESC also works.
+    quit_key: str = "q"
+    # Joint configuration the robot returns to after a save/discard, in the robot
+    # action key space (percent, piper_full unit="pct"). Default is the
+    # measured parked "home" pose of the Piper (rounded). Override on the CLI,
+    # e.g. --strategy.home_position='{"joint_1.pos": 0, ...}'. If set to empty,
+    # the strategy falls back to the startup pose captured at connect.
+    home_position: dict[str, float] = field(
+        default_factory=lambda: {
+            "joint_1.pos": -11.0,
+            "joint_2.pos": -95.0,
+            "joint_3.pos": 100.0,
+            "joint_4.pos": 0.0,
+            "joint_5.pos": -13.0,
+            "joint_6.pos": 0.0,
+            "gripper.pos": 0.0,
+        }
+    )
+    # Seconds for the smooth return-to-home interpolation.
+    home_duration_s: float = 3.0
+    # Seconds for the smooth leader-to-follower alignment on AUTONOMOUS -> PAUSED.
+    align_duration_s: float = 2.0
+
+
 # ---------------------------------------------------------------------------
 # Top-level rollout config
 # ---------------------------------------------------------------------------
@@ -252,6 +320,9 @@ class RolloutConfig:
 
     def __post_init__(self):
         """Validate config invariants and load the policy config from ``--policy.path``."""
+        if self.fps <= 0:
+            raise ValueError(f"--fps must be a positive control frequency in Hz, got {self.fps}")
+
         # --- Strategy-specific validation ---
         if isinstance(self.strategy, DAggerStrategyConfig) and self.teleop is None:
             raise ValueError("DAgger strategy requires --teleop.type to be set")
@@ -328,6 +399,19 @@ class RolloutConfig:
             self.policy.pretrained_path = policy_path
         if self.policy is None:
             raise ValueError("--policy.path is required for rollout")
+
+        # --- QP smoother rate ---
+        # The QP velocity caps and the EE projector clamps are per-tick
+        # quantities: the smoother rate must equal the control-loop rate.
+        # None inherits --fps; an explicit mismatch is rejected.
+        if hasattr(self.inference, "rate_hz"):
+            if self.inference.rate_hz is None:
+                self.inference.rate_hz = float(self.fps)
+            elif abs(float(self.inference.rate_hz) - float(self.fps)) > 1e-6:
+                raise ValueError(
+                    f"--inference.rate_hz={self.inference.rate_hz} differs from --fps={self.fps}. "
+                    "Drop --inference.rate_hz (it inherits fps) or set them equal."
+                )
 
         # --- Task resolution ---
         # When any --dataset.* flag is passed, draccus creates a DatasetRecordConfig with single_task="".

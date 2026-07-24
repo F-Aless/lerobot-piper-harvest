@@ -176,3 +176,12 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+# Fork-specific: local notes and experiment scratch
+to_do/
+GUIDE_FINAL.txt
+
+# Piper URDF + meshes are runtime assets of piper_ee (shipped as package data),
+# so they must override the *.urdf ignore above.
+!src/lerobot/robots/piper_ee/piper/piper.urdf
+!src/lerobot/robots/piper_ee/piper/meshes/*.STL

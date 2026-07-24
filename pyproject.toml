@@ -187,6 +187,13 @@ intelrealsense = [
     "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
 ]
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
+# AgileX Piper 6-DOF arm (CAN bus). The SDK exposes the MIT streaming flag
+# (is_mit_mode=0xAD) needed for low-latency 60 Hz teleop.
+piper = ["piper_sdk>=0.6.0,<1.0.0"]
+# PiperEE (Cartesian-space Piper). Pinocchio has no PyPI wheels for many
+# platforms, so we don't pin it here — install via conda-forge:
+#   conda install -c conda-forge pinocchio
+piper-ee = ["lerobot[piper]"]
 
 # Policies
 diffusion = ["lerobot[diffusers-dep]"]
@@ -216,12 +223,17 @@ robometer = ["lerobot[transformers-dep]", "lerobot[qwen-vl-utils-dep]", "lerobot
 topreward = ["lerobot[transformers-dep]"]
 xvla = ["lerobot[transformers-dep]"]
 eo1 = ["lerobot[transformers-dep]", "lerobot[qwen-vl-utils-dep]"]
-hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.14,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
+# NOTE: gym-hil minimum is below upstream's (0.1.14) on purpose — it matches the
+# version this fork was validated with (see uv.lock); same for gym-aloha/hf-libero.
+hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
 vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
 
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]
 peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
+# QP-based chunk smoother (rollout/inference qp_rtc + qp_sync engines).
+# scipy.sparse is used to build the OSQP P/A matrices.
+chunk-smoother = ["osqp>=0.6.7", "lerobot[scipy-dep]"]
 
 # Development
 dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1", "mypy>=1.19.1", "ruff>=0.14.1", "lerobot[notebook]"]
@@ -231,9 +243,11 @@ video_benchmark = ["scikit-image>=0.23.2,<0.26.0", "pandas>=2.2.2,<2.4.0"]
 
 # Simulation
 # NOTE: Explicitly listing scipy helps flatten the dependecy tree.
-aloha = ["lerobot[dataset]", "gym-aloha>=0.1.4,<0.2.0", "lerobot[scipy-dep]"]
+# NOTE: gym-aloha / hf-libero minimums are below upstream's on purpose — they match
+# the versions this fork was validated with (see uv.lock).
+aloha = ["lerobot[dataset]", "gym-aloha>=0.1.2,<0.2.0", "lerobot[scipy-dep]"]
 pusht = ["lerobot[dataset]", "gym-pusht>=0.1.5,<0.2.0", "pymunk>=6.6.0,<7.0.0"] # TODO: Fix pymunk version in gym-pusht instead
-libero = ["lerobot[dataset]", "lerobot[transformers-dep]", "hf-libero>=0.1.4,<0.2.0; sys_platform == 'linux'", "lerobot[scipy-dep]"]
+libero = ["lerobot[dataset]", "lerobot[transformers-dep]", "hf-libero>=0.1.3,<0.2.0; sys_platform == 'linux'", "lerobot[scipy-dep]"]
 metaworld = ["lerobot[dataset]", "metaworld==3.0.0", "lerobot[scipy-dep]"]
 # NOTE: vlabench is NOT exposed as a `lerobot` extra. Its only distribution
 # is the OpenMOSS/VLABench GitHub repo (package name `VLABench`, no PyPI
@@ -305,6 +319,7 @@ lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
 lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
 lerobot-find-port="lerobot.scripts.lerobot_find_port:main"
 lerobot-record="lerobot.scripts.lerobot_record:main"
+lerobot-record-dagger="lerobot.scripts.lerobot_record_dagger:main"
 lerobot-replay="lerobot.scripts.lerobot_replay:main"
 lerobot-setup-motors="lerobot.scripts.lerobot_setup_motors:main"
 lerobot-teleoperate="lerobot.scripts.lerobot_teleoperate:main"
@@ -335,7 +350,12 @@ torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 
 [tool.setuptools.package-data]
-lerobot = ["envs/*.json"]
+lerobot = [
+    "envs/*.json",
+    "robots/piper_ee/piper/*.urdf",
+    "robots/piper_ee/piper/meshes/*.STL",
+    "robots/piper_ee/piper/meshes/*.stl",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -375,6 +395,20 @@ ignore = [
 # E402: conditional-import guards (TYPE_CHECKING / is_package_available) must precede the imports they protect
 "src/lerobot/scripts/convert_dataset_v21_to_v30.py" = ["E402"]
 "src/lerobot/policies/wall_x/**" = ["N801", "N812", "SIM102", "SIM108", "SIM210", "SIM211", "B006", "B007", "SIM118"] # Supprese these as they are coming from original Qwen2_5_vl code TODO(pepijn): refactor original
+# N803/N806/E741: classical robotics/optimisation math notation (R rotation
+# matrices, J Jacobians, T horizons, OSQP l/u bounds) — renaming hurts the math.
+"src/lerobot/robots/piper_ee/**" = ["N803", "N806"]
+"src/lerobot/policies/chunk_smoother/**" = ["N803", "N806", "E741"]
+"tests/robots/test_piper_ee_pipeline.py" = ["N803", "N806"]
+"tests/test_qp_ee_engine.py" = ["N803", "N806"]
+# UP046/UP047: PEP 695 generics deliberately rewritten to TypeVar/Generic so the
+# package also runs on the py3.11 Isaac sim-eval env; keep the compat form.
+"src/lerobot/datasets/streaming_dataset.py" = ["UP046"]
+"src/lerobot/processor/pipeline.py" = ["UP046"]
+"src/lerobot/utils/io_utils.py" = ["UP047"]
+# UP042: MotorNormMode(str, Enum) is untouched upstream code that only newer
+# ruff releases flag; not rewritten here to keep upstream parity.
+"src/lerobot/motors/motors_bus.py" = ["UP042"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

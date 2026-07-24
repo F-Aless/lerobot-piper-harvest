@@ -150,6 +150,7 @@ class ActionQueue:
         processed_actions: Tensor,
         real_delay: int,
         action_index_before_inference: int | None = None,
+        feedforward: int = 0,
     ):
         """Merge new actions into the queue.
 
@@ -162,9 +163,14 @@ class ActionQueue:
             processed_actions: Post-processed actions for robot (time_steps, action_dim).
             real_delay: Number of time steps of inference delay.
             action_index_before_inference: Index before inference started, for validation.
+            feedforward: Extra ticks to splice ahead (lead the policy). The QP anchor
+                is placed at the same index, so seam continuity holds. Validation uses
+                the actual delay, not the lead.
         """
         with self.lock:
             delay = self._check_and_resolve_delays(real_delay, action_index_before_inference)
+            if int(feedforward) > 0:
+                delay = min(delay + int(feedforward), len(original_actions) - 1, len(processed_actions) - 1)
 
             if self.cfg.enabled:
                 self._replace_actions_queue(original_actions, processed_actions, delay)

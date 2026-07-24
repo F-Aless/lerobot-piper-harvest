@@ -1,177 +1,133 @@
-<p align="center">
-  <img alt="LeRobot, Hugging Face Robotics Library" src="./media/readme/lerobot-logo-thumbnail.png" width="100%">
-</p>
+# LeRobot — AgileX Piper fork (QP-smoothed VLA deployment & DAgger)
 
-<div align="center">
+This repository is a research fork of [🤗 LeRobot](https://github.com/huggingface/lerobot),
+based on upstream `main` at commit [`79c68214`](https://github.com/huggingface/lerobot/commit/79c68214070e392f04800ed092dd89e0b761f44e)
+(June 2026, v0.5.2 dev). It adds real-robot support for the **AgileX Piper 6-DOF arm**
+and the tooling we use to deploy and fine-tune VLA policies (SmolVLA) on a real-world
+**apple-harvesting task**: QP-based action-chunk smoothing, smoothed real-time-chunking
+(RTC) inference, and single-operator DAgger data collection.
 
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/latest_deps_tests.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/latest_deps_tests.yml?query=branch%3Amain)
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/docker_publish.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/docker_publish.yml?query=branch%3Amain)
-[![Python versions](https://img.shields.io/pypi/pyversions/lerobot)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/huggingface/lerobot/blob/main/LICENSE)
-[![Status](https://img.shields.io/pypi/status/lerobot)](https://pypi.org/project/lerobot/)
-[![Version](https://img.shields.io/pypi/v/lerobot)](https://pypi.org/project/lerobot/)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.1-ff69b4.svg)](https://github.com/huggingface/lerobot/blob/main/CODE_OF_CONDUCT.md)
-[![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/q8Dzzpym3f)
+Everything upstream LeRobot provides (datasets, policies, training) works unchanged —
+see the [official docs](https://huggingface.co/docs/lerobot/index) for that. This README
+covers only what this fork adds.
 
-</div>
+## What this fork adds
 
-**LeRobot** aims to provide models, datasets, and tools for real-world robotics in PyTorch. The goal is to lower the barrier to entry so that everyone can contribute to and benefit from shared datasets and pretrained models.
+**Robots and teleoperators**
 
-🤗 A hardware-agnostic, Python-native interface that standardizes control across diverse platforms, from low-cost arms (SO-100) to humanoids.
+| Component | Type | Description |
+|---|---|---|
+| `piper_full` | robot | AgileX Piper 6-DOF + gripper over CAN (`piper_sdk`), joint-space control at up to 60 Hz |
+| `piper_ee` | robot | Cartesian (end-effector) variant of the Piper: damped-least-squares IK on the bundled URDF, with yaw handling tuned for the Piper's home-pose singularity |
+| `so101_follower_7dof` / `so101_leader_7dof` | robot / teleop | 7-motor SO-ARM 101 pair whose layout mirrors the Piper's kinematic chain — actions recorded from the leader replay 1:1 on the Piper |
+| `so_leader_piper` | teleop | Classic 5-DOF SO-ARM leader remapped to drive the Piper (missing forearm-roll joint held fixed) |
 
-🤗 A standardized, scalable LeRobotDataset format (Parquet + MP4 or images) hosted on the Hugging Face Hub, enabling efficient storage, streaming and visualization of massive robotic datasets.
+**Inference & control**
 
-🤗 State-of-the-art policies that have been shown to transfer to the real-world ready for training and deployment.
+- **QP chunk smoother** (`lerobot.policies.chunk_smoother`) — each predicted action
+  chunk is passed through a per-joint OSQP quadratic program that penalises
+  acceleration and jerk, caps per-tick velocity, respects joint limits, and anchors
+  the chunk to the last commanded action so consecutive chunks join without spikes.
+- **`qp_sync` / `qp_rtc` inference engines** — the smoother integrated into blocking
+  chunked inference and into RTC (background) inference respectively. In *EE mode*
+  a Cartesian chunk is projected, batch-IK'd, QP-smoothed in joint space, and emitted
+  as plain joint commands.
+- **Golden tickets** — optional fixed initial noise for the flow-matching action head
+  (instead of fresh Gaussian noise per inference), making rollouts reproducible.
+  Selected seeds for our checkpoints live in [`golden_tickets/`](golden_tickets/).
+- **SLERP action interpolation** — orientation triples (`ee.roll/pitch/yaw`) are
+  interpolated on SO(3) instead of linearly in Euler space.
 
-🤗 Comprehensive support for the open-source ecosystem to democratize physical AI.
+**Data collection**
 
-## Quick Start
+- **`dagger_cycle` rollout strategy** — single-key human-in-the-loop loop:
+  the QP-smoothed policy drives the arm, one key cycles
+  AUTONOMOUS → PAUSED (leader aligns to the follower) → CORRECTING (human teleop),
+  and both autonomous and correction frames land in the same episode with an
+  `intervention` flag.
+- **`lerobot-record-dagger` script** — "policy preview, then human correction"
+  recording workflow.
 
-LeRobot can be installed directly from PyPI.
+## Installation
 
-```bash
-pip install lerobot
-lerobot-info
-```
-
-> [!IMPORTANT]
-> For detailed installation guide, please see the [Installation Documentation](https://huggingface.co/docs/lerobot/installation).
-
-## Robots & Control
-
-<div align="center">
-  <img src="./media/readme/robots_control_video.webp" width="640px" alt="Reachy 2 Demo">
-</div>
-
-LeRobot provides a unified `Robot` class interface that decouples control logic from hardware specifics. It supports a wide range of robots and teleoperation devices.
-
-```python
-from lerobot.robots.myrobot import MyRobot
-
-# Connect to a robot
-robot = MyRobot(config=...)
-robot.connect()
-
-# Read observation and send action
-obs = robot.get_observation()
-action = model.select_action(obs)
-robot.send_action(action)
-```
-
-**Supported Hardware:** SO100, LeKiwi, Koch, HopeJR, OMX, EarthRover, Reachy2, Gamepads, Keyboards, Phones, OpenARM, Unitree G1.
-
-While these devices are natively integrated into the LeRobot codebase, the library is designed to be extensible. You can easily implement the Robot interface to utilize LeRobot's data collection, training, and visualization tools for your own custom robot.
-
-For detailed hardware setup guides, see the [Hardware Documentation](https://huggingface.co/docs/lerobot/integrate_hardware).
-
-## LeRobot Dataset
-
-To solve the data fragmentation problem in robotics, we utilize the **LeRobotDataset** format.
-
-- **Structure:** Synchronized MP4 videos (or images) for vision and Parquet files for state/action data.
-- **HF Hub Integration:** Explore thousands of robotics datasets on the [Hugging Face Hub](https://huggingface.co/lerobot).
-- **Tools:** Seamlessly delete episodes, split by indices/fractions, add/remove features, and merge multiple datasets.
-
-```python
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-# Load a dataset from the Hub
-dataset = LeRobotDataset("lerobot/aloha_mobile_cabinet")
-
-# Access data (automatically handles video decoding)
-episode_index=0
-print(f"{dataset[episode_index]['action'].shape=}\n")
-```
-
-Learn more about it in the [LeRobotDataset Documentation](https://huggingface.co/docs/lerobot/lerobot-dataset-v3)
-
-## SoTA Models
-
-LeRobot implements state-of-the-art policies in pure PyTorch, covering Imitation Learning, Reinforcement Learning, and Vision-Language-Action (VLA) models, with more coming soon. It also provides you with the tools to instrument and inspect your training process.
-
-<p align="center">
-  <img alt="Gr00t Architecture" src="./media/readme/VLA_architecture.jpg" width="640px">
-</p>
-
-Training a policy is as simple as running a script configuration:
+Requires Python ≥ 3.12 (a conda env is recommended).
 
 ```bash
-lerobot-train \
-  --policy=act \
-  --dataset.repo_id=lerobot/aloha_mobile_cabinet
+git clone <this-repo-url> lerobot-piper
+cd lerobot-piper
+pip install -e ".[piper,chunk-smoother]"
 ```
 
-| Category                   | Models                                                                                                                                                                                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Imitation Learning**     | [ACT](./docs/source/policy_act_README.md), [Diffusion](./docs/source/policy_diffusion_README.md), [VQ-BeT](./docs/source/policy_vqbet_README.md), [Multitask DiT Policy](./docs/source/policy_multi_task_dit_README.md) |
-| **Reinforcement Learning** | [HIL-SERL](./docs/source/hilserl.mdx), [TDMPC](./docs/source/policy_tdmpc_README.md) & QC-FQL (coming soon)                                                                                                             |
-| **VLAs Models**            | [Pi0Fast](./docs/source/pi0fast.mdx), [Pi0.5](./docs/source/pi05.mdx), [GR00T N1.5](./docs/source/policy_groot_README.md), [SmolVLA](./docs/source/policy_smolvla_README.md), [XVLA](./docs/source/xvla.mdx)            |
+Relevant extras:
 
-Similarly to the hardware, you can easily implement your own policy & leverage LeRobot's data collection, training, and visualization tools, and share your model to the HF Hub
+| Extra | Installs | Needed for |
+|---|---|---|
+| `piper` | `piper_sdk` | talking to the Piper arm (`piper_full`, `piper_ee`) |
+| `chunk-smoother` | `osqp`, `scipy` | the `qp_sync` / `qp_rtc` inference engines |
+| `feetech` | Feetech servo SDK | the SO-ARM leaders/followers |
+| `intelrealsense` | RealSense SDK | the cameras used in our setup |
+| `smolvla` | SmolVLA deps | running our harvest-apples checkpoints |
 
-For detailed policy setup guides, see the [Policy Documentation](https://huggingface.co/docs/lerobot/bring_your_own_policies). For GPU/RAM requirements and expected training time per policy, see the [Compute Hardware Guide](https://huggingface.co/docs/lerobot/hardware_guide).
-
-## Inference & Evaluation
-
-Evaluate your policies in simulation or on real hardware using the unified evaluation script. LeRobot supports standard benchmarks like **LIBERO**, **MetaWorld** and more to come.
+**Pinocchio is only needed for end-effector kinematics** — i.e. the `piper_ee` robot,
+`--inference.ee_mode=true`, or FK-derived `ee.*` state observations. It is imported
+lazily and deliberately **not** declared as a pip dependency (no reliable PyPI wheels
+on all platforms). If and only if you need EE poses, install it via conda:
 
 ```bash
-# Evaluate a policy on the LIBERO benchmark
-lerobot-eval \
-  --policy.path=lerobot/pi0_libero_finetuned \
-  --env.type=libero \
-  --env.task=libero_object \
-  --eval.n_episodes=10
+conda install -c conda-forge pinocchio
 ```
 
-Learn how to implement your own simulation environment or benchmark and distribute it from the HF Hub by following the [EnvHub Documentation](https://huggingface.co/docs/lerobot/envhub)
+Joint-space usage (`piper_full` teleop, recording, `qp_sync`/`qp_rtc` with
+`ee_mode=false`) works without it.
 
-## Resources
+## Quick start
 
-- **[Documentation](https://huggingface.co/docs/lerobot/index):** The complete guide to tutorials & API.
-- **[Chinese Tutorials: LeRobot+SO-ARM101中文教程-同济子豪兄](https://zihao-ai.feishu.cn/wiki/space/7589642043471924447)** Detailed doc for assembling, teleoperate, dataset, train, deploy. Verified by Seed Studio and 5 global hackathon players.
-- **[Discord](https://discord.gg/q8Dzzpym3f):** Join the `LeRobot` server to discuss with the community.
-- **[X](https://x.com/LeRobotHF):** Follow us on X to stay up-to-date with the latest developments.
-- **[Robot Learning Tutorial](https://huggingface.co/spaces/lerobot/robot-learning-tutorial):** A free, hands-on course to learn robot learning using LeRobot.
+Full step-by-step commands (CAN bus activation, calibration, teleop, recording,
+autonomous rollout, DAgger) are in **[USAGE_GUIDE.md](USAGE_GUIDE.md)**.
+The shortest path, once the CAN interface is up and the leader is calibrated:
 
-## Citation
+```bash
+# Teleoperate the Piper with the 7-DOF SO-101 leader
+lerobot-teleoperate \
+    --robot.type=piper_full --robot.id=my_piper \
+    --teleop.type=so101_leader_7dof --teleop.port=/dev/ttyACM0 --teleop.id=leader_7dof
 
-If you use LeRobot in your project, please cite the GitHub repository to acknowledge the ongoing development and contributors:
-
-```bibtex
-@misc{cadene2024lerobot,
-    author = {Cadene, Remi and Alibert, Simon and Soare, Alexander and Gallouedec, Quentin and Zouitine, Adil and Palma, Steven and Kooijmans, Pepijn and Aractingi, Michel and Shukor, Mustafa and Aubakirova, Dana and Russi, Martino and Capuano, Francesco and Pascal, Caroline and Choghari, Jade and Moss, Jess and Wolf, Thomas},
-    title = {LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch},
-    howpublished = "\url{https://github.com/huggingface/lerobot}",
-    year = {2024}
-}
+# Autonomous rollout with QP-smoothed RTC inference
+lerobot-rollout \
+    --strategy.type=base \
+    --policy.path=Faless/harvest_apples_smolvla_real \
+    --robot.type=piper_full --robot.id=my_piper \
+    --task="Pick the red apples one by one and place them into the green basket" \
+    --fps=25 --inference.type=qp_rtc \
+    --inference.lambda_a=80 --inference.lambda_j=80 --inference.v_max_deg_s=80 \
+    --device=cuda
 ```
 
-If you are referencing our research or the academic paper, please also cite our ICLR publication:
+## Documentation
 
-<details>
-<summary><b>ICLR 2026 Paper</b></summary>
+- **[USAGE_GUIDE.md](USAGE_GUIDE.md)** — operational guide with the exact commands
+  used in the lab (CAN setup, calibration, teleop, dataset recording, rollout,
+  DAgger sessions, experiment scripts).
+- **[CODE_OVERVIEW.md](CODE_OVERVIEW.md)** — explanation of the code added by this
+  fork: module map, the QP smoother formulation, the EE→joint pipeline, the
+  inference engines, the DAgger strategies, and every change made to upstream files.
+- [Upstream LeRobot documentation](https://huggingface.co/docs/lerobot/index) — for
+  everything else (datasets, training, policies).
 
-```bibtex
-@inproceedings{cadenelerobot,
-  title={LeRobot: An Open-Source Library for End-to-End Robot Learning},
-  author={Cadene, Remi and Alibert, Simon and Capuano, Francesco and Aractingi, Michel and Zouitine, Adil and Kooijmans, Pepijn and Choghari, Jade and Russi, Martino and Pascal, Caroline and Palma, Steven and Shukor, Mustafa and Moss, Jess and Soare, Alexander and Aubakirova, Dana and Lhoest, Quentin and Gallou\'edec, Quentin and Wolf, Thomas},
-  booktitle={The Fourteenth International Conference on Learning Representations},
-  year={2026},
-  url={https://arxiv.org/abs/2602.22818}
-}
-```
+## Known limitations
 
-</details>
+- `tests/artifacts/` contains ~50 Git LFS *pointer* files without their content
+  (inherited from how this snapshot was obtained; the repo is hosted without
+  LFS). The upstream tests that read those artifacts are not runnable from a
+  clone — restore the files from [upstream](https://github.com/huggingface/lerobot)
+  if you need them. None of this fork's own code or tests depend on them.
+- `piper_full`'s `deg`/`rad` joint units are implemented and unit-tested but
+  **not yet validated on the real arm** (all our datasets and policies use the
+  default normalized `pct` convention).
 
-## Contribute
+## License and attribution
 
-We welcome contributions from everyone in the community! To get started, please read our [CONTRIBUTING.md](https://github.com/huggingface/lerobot/blob/main/CONTRIBUTING.md) guide. Whether you're adding a new feature, improving documentation, or fixing a bug, your help and feedback are invaluable. We're incredibly excited about the future of open-source robotics and can't wait to work with you on what's next—thank you for your support!
-
-<p align="center">
-  <img alt="SO101 Video" src="./media/readme/so100_video.webp" width="640px">
-</p>
-
-<div align="center">
-<sub>Built by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>
-</div>
+This fork, like upstream LeRobot, is released under the [Apache 2.0 license](LICENSE).
+LeRobot is developed by the Hugging Face team and contributors — see the
+[upstream repository](https://github.com/huggingface/lerobot) for the original project
+and citation information.

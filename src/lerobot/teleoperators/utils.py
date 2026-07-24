@@ -55,6 +55,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .so_leader import SO101Leader
 
         return SO101Leader(config)
+    elif config.type == "so_leader_piper":
+        from .so_leader import SOLeaderPiper
+
+        return SOLeaderPiper(config)
     elif config.type == "mock_teleop":
         from tests.mocks.mock_teleop import MockTeleop
 
@@ -107,6 +111,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .bi_rebot_102_leader import BiRebotArm102Leader
 
         return BiRebotArm102Leader(config)
+    elif config.type == "so101_leader_7dof":
+        from .so101_leader_7dof import SO101Leader7Dof
+
+        return SO101Leader7Dof(config)
     else:
         try:
             return cast("Teleoperator", make_device_from_device_class(config))

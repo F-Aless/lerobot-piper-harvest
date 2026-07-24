@@ -78,6 +78,15 @@ class InferenceEngine(abc.ABC):
     def resume(self) -> None:  # noqa: B027
         """Resume background inference.  Default: no-op."""
 
+    def notify_last_commanded_action(self, action: torch.Tensor) -> None:  # noqa: B027
+        """Publish the most recent action commanded to the robot.
+
+        The tensor is in the canonical ``ordered_action_keys`` space — the
+        same space the policy outputs — *not* the post-``robot_action_processor``
+        dict space. Engines that need anchoring (e.g. chunk smoothers) override
+        this. Default: no-op.
+        """
+
     @property
     def ready(self) -> bool:
         """True once the backend can produce actions (e.g. warmup done)."""

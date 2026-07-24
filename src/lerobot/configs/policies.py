@@ -79,6 +79,17 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     # Either the repo ID of a model hosted on the Hub or a path to a directory containing weights
     # saved using `Policy.save_pretrained`. If not provided, the policy is initialized from scratch.
     pretrained_path: Path | None = None
+    # Optional Hub revision (branch/tag/commit) of the pretrained base referenced by
+    # `pretrained_path`. Accepted for compatibility with checkpoints saved by lerobot
+    # versions that persist this field; unused at load time.
+    pretrained_revision: str | None = None
+
+    # Action feature names of the training dataset, persisted at make_policy
+    # time (see policies/factory.py).  Makes checkpoints self-describing:
+    # deployment-time consumers (relative-action steps, the qp_sync/qp_rtc
+    # EE→joint conversion, action-space validation) read the chunk column
+    # layout from here.
+    action_feature_names: list[str] | None = None
 
     def __post_init__(self) -> None:
         if not self.device or not is_torch_device_available(self.device):

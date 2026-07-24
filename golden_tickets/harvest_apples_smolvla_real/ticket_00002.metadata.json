@@ -1,0 +1,30 @@
+{
+  "ticket_file": "ticket_00002.pt",
+  "sha256": "4c48830e0d343e5d660a31eb7fdf610924cae2d409026934f805caa51c6c9eaf",
+  "policy_checkpoint": "061500",
+  "policy_repo": "Faless/harvest_apples_smolvla_real",
+  "controller": {
+    "type": "qprtc",
+    "rtc_queue_threshold": 19,
+    "rtc_execution_horizon": 19,
+    "rtc_simulated_delay_ticks": 10,
+    "env_control_hz": 60,
+    "env_decimation": 2,
+    "qp_rate_hz": 60,
+    "qp_lambda_a": 80,
+    "qp_lambda_j": 80,
+    "qp_v_max_deg_s": 80,
+    "rtc_runtime_blend_steps": 10,
+    "rtc_prefix_attention_schedule": "EXP"
+  },
+  "source_run": "real061500_ticket_overnight_qt19_h19_curated20",
+  "eval_subset": "outputs/scene_picker/curated_60_battery_overnight20.json",
+  "eval_result_at_upload": {
+    "episodes": 20,
+    "apples_collected": 54,
+    "total_targets": 62,
+    "apple_rate": 0.8709677419354839,
+    "full_success_rate": 0.6
+  },
+  "uploaded_at": "2026-06-26T14:46:14"
+}

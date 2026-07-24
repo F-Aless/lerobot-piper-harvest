@@ -64,8 +64,11 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     omx_follower,
     openarm_follower,
+    piper_ee,
+    piper_full,
     reachy2,
     rebot_b601_follower,
+    so101_follower_7dof,
     so_follower,
     unitree_g1,
 )

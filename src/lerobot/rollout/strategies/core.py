@@ -22,7 +22,7 @@ import time
 from typing import TYPE_CHECKING
 
 from lerobot.datasets.utils import DEFAULT_VIDEO_FILE_SIZE_IN_MB
-from lerobot.utils.action_interpolator import ActionInterpolator
+from lerobot.utils.action_interpolator import ActionInterpolator, rpy_triples_from_keys
 from lerobot.utils.constants import OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.utils.robot_utils import precise_sleep
@@ -60,7 +60,12 @@ class RolloutStrategy(abc.ABC):
         Call this from ``setup()`` so strategies share identical
         initialisation without duplicating code.
         """
-        self._interpolator = ActionInterpolator(multiplier=ctx.runtime.cfg.interpolation_multiplier)
+        # Orientation triples (e.g. ee.roll/pitch/yaw) are SLERP-interpolated:
+        # linear RPY interpolation jumps across the ±π Euler branch cut.
+        self._interpolator = ActionInterpolator(
+            multiplier=ctx.runtime.cfg.interpolation_multiplier,
+            rpy_triples=rpy_triples_from_keys(ctx.data.ordered_action_keys),
+        )
         self._engine = ctx.policy.inference
         logger.info("Starting inference engine...")
         self._engine.reset()
@@ -123,10 +128,22 @@ class RolloutStrategy(abc.ABC):
             self._engine.stop()
         robot = hw.robot_wrapper.inner
         if robot.is_connected:
-            if return_to_initial_position and hw.initial_position:
-                logger.info("Returning robot to initial position before shutdown...")
-                self._return_to_initial_position(hw)
-            elif not return_to_initial_position:
+            if return_to_initial_position:
+                # Home to all-joints-zero (physical 0 deg) instead of the captured
+                # startup pose when the robot supports homing (e.g. Piper
+                # go_home_slow -> JointCtrl(0,...,0)). NB: "all joints 0 deg" is the
+                # home pose, NOT "0 normalized" — verified on hardware. Falls back to
+                # the generic interpolation toward the initial pose otherwise.
+                if hasattr(robot, "go_home_slow"):
+                    logger.info("Homing robot to all-joints-zero before shutdown...")
+                    try:
+                        robot.go_home_slow()
+                    except Exception as e:
+                        logger.warning("Could not home robot to zero: %s", e)
+                elif hw.initial_position:
+                    logger.info("Returning robot to initial position before shutdown...")
+                    self._return_to_initial_position(hw)
+            else:
                 logger.info(
                     "Skipping return-to-initial-position (disabled by config); leaving robot in final pose."
                 )
@@ -301,4 +318,7 @@ def send_next_action(
     action_dict = {k: interp[i].item() for i, k in enumerate(ordered_keys)}
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
     ctx.hardware.robot_wrapper.send_action(processed)
+    # Notify the engine of the action just commanded — in canonical ordered_action_keys
+    # space (pre-robot_action_processor), so backends like QP smoothers can anchor.
+    engine.notify_last_commanded_action(interp)
     return action_dict

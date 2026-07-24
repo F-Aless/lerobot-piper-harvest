@@ -80,6 +80,26 @@ def _resolve_action_key_order(
     return policy_action_names
 
 
+def _is_action_feature(key: str, value: object) -> bool:
+    """True for scalar robot action features routed to the policy/action tensor."""
+    del key
+    return value is float
+
+
+def _is_state_feature(key: str, value: object) -> bool:
+    """True for scalar robot state features routed to observation.state.
+
+    Whitelist ``.pos`` (joint/gripper position) and ``.tau`` (joint torque /
+    gripper force) — both are first-class proprioceptive channels and
+    policies are trained against them (e.g. SmolVLA on piper_full expects
+    an 8D state = 6 joints + gripper.pos + gripper.tau).
+
+    Still excludes EE-pose fields (``ee.x``, ``ee.roll``, ...) and arbitrary
+    scalar floats so derived signals don't accidentally enter the state vector.
+    """
+    return value is float and (key.endswith(".pos") or key.endswith(".tau"))
+
+
 # ---------------------------------------------------------------------------
 # Sub-contexts
 # ---------------------------------------------------------------------------
@@ -277,11 +297,9 @@ def build_rollout_context(
     # ``float`` type itself used as a sentinel for scalar motor features —
     # see ``dict[str, type | tuple]`` annotation on ``Robot.observation_features``.
     observation_features_hw = {
-        k: v
-        for k, v in all_obs_features.items()
-        if isinstance(v, tuple) or (v is float and k.endswith(".pos"))
+        k: v for k, v in all_obs_features.items() if isinstance(v, tuple) or _is_state_feature(k, v)
     }
-    action_features_hw = {k: v for k, v in robot.action_features.items() if k.endswith(".pos")}
+    action_features_hw = {k: v for k, v in robot.action_features.items() if _is_action_feature(k, v)}
 
     # The action side is always needed: sync inference reads action names from
     # ``dataset_features[ACTION]`` to map policy tensors back to robot actions.
@@ -304,6 +322,21 @@ def build_rollout_context(
         list(policy_action_names) if policy_action_names else None,
         raw_action_keys,
     )
+
+    # A policy whose action space differs from the robot's (e.g. an ee.* pose
+    # policy on the joint-space piper_full) is only runnable through engines
+    # that convert chunks between the two spaces — anything else would send
+    # mislabelled values to the hardware.
+    if policy_action_names and set(policy_action_names) != set(raw_action_keys):
+        from .inference.factory import QPRTCInferenceConfig, QPSyncInferenceConfig
+
+        if not isinstance(cfg.inference, (QPRTCInferenceConfig, QPSyncInferenceConfig)):
+            raise ValueError(
+                f"Policy action space {sorted(policy_action_names)} does not match the robot's "
+                f"{sorted(raw_action_keys)}. Only the qp_sync/qp_rtc engines can convert between "
+                "action spaces (EE→joint); use --inference.type=qp_sync or qp_rtc, or pick a robot "
+                "whose action features match the policy."
+            )
 
     # Validate visual features if no rename_map is active
     rename_map = cfg.rename_map

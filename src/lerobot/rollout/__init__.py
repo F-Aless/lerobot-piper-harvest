@@ -20,6 +20,7 @@ require_package("datasets", extra="dataset")
 
 from .configs import (
     BaseStrategyConfig,
+    DAggerCycleStrategyConfig,
     DAggerKeyboardConfig,
     DAggerPedalConfig,
     DAggerStrategyConfig,
@@ -49,6 +50,7 @@ from .inference import (
 )
 from .strategies import (
     BaseStrategy,
+    DAggerCycleStrategy,
     DAggerStrategy,
     EpisodicStrategy,
     HighlightStrategy,
@@ -60,6 +62,8 @@ from .strategies import (
 __all__ = [
     "BaseStrategy",
     "BaseStrategyConfig",
+    "DAggerCycleStrategy",
+    "DAggerCycleStrategyConfig",
     "DAggerKeyboardConfig",
     "DAggerPedalConfig",
     "DAggerStrategy",

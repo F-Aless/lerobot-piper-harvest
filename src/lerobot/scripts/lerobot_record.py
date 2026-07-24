@@ -128,8 +128,11 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     omx_follower,
     openarm_follower,
+    piper_ee,
+    piper_full,
     reachy2,
     rebot_b601_follower,
+    so101_follower_7dof,
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
@@ -147,6 +150,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     reachy2_teleoperator,
     rebot_102_leader,
+    so101_leader_7dof,
     so_leader,
     unitree_g1,
 )
@@ -210,9 +214,9 @@ class RecordConfig:
                                V
                     [ robot.send_action() ] -- (Robot Executes)
                                V
-                    ( Save to Dataset )
+                    ( Rerun Log )
                                V
-                  ( Rerun Log / Loop Wait )
+                  ( Save to Dataset / Loop Wait )
 """
 
 
@@ -280,12 +284,6 @@ def record_loop(
         # Get robot observation
         obs = robot.get_observation()
 
-        # Applies a pipeline to the raw robot observation, default is IdentityProcessor
-        obs_processed = robot_observation_processor(obs)
-
-        if dataset is not None:
-            observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
-
         # Get action from teleop
         if isinstance(teleop, Teleoperator):
             act = teleop.get_action()
@@ -322,16 +320,22 @@ def record_loop(
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
         _sent_action = robot.send_action(robot_action_to_send)
 
-        # Write to dataset
-        if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
+        # Applies a pipeline to the raw robot observation, default is IdentityProcessor.
+        # Kept after send_action so the control path matches lerobot-teleoperate;
+        # recording only adds dataset/logging work around the same command flow.
+        obs_processed = robot_observation_processor(obs)
 
         if display_data:
             log_rerun_data(
                 observation=obs_processed, action=action_values, compress_images=display_compressed_images
             )
+
+        # Write to dataset after visualization so Rerun stays live even if image/video writing lags.
+        if dataset is not None:
+            observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+            frame = {**observation_frame, **action_frame, "task": single_task}
+            dataset.add_frame(frame)
 
         dt_s = time.perf_counter() - start_loop_t
 
@@ -437,9 +441,9 @@ def record(
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
             )
 
-        robot.connect()
         if teleop is not None:
             teleop.connect()
+        robot.connect()
 
         listener, events = init_keyboard_listener()
 
@@ -502,10 +506,10 @@ def record(
         if dataset:
             dataset.finalize()
 
-        if robot.is_connected:
-            robot.disconnect()
         if teleop and teleop.is_connected:
             teleop.disconnect()
+        if robot.is_connected:
+            robot.disconnect()
 
         if not is_headless() and listener:
             listener.stop()

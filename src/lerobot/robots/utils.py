@@ -76,6 +76,18 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_rebot_b601_follower import BiRebotB601Follower
 
         return BiRebotB601Follower(config)
+    elif config.type == "piper_full":
+        from .piper_full import PiperFull
+
+        return PiperFull(config)
+    elif config.type == "piper_ee":
+        from .piper_ee import PiperEE
+
+        return PiperEE(config)
+    elif config.type == "so101_follower_7dof":
+        from .so101_follower_7dof import SO101Follower7Dof
+
+        return SO101Follower7Dof(config)
     elif config.type == "mock_robot":
         from tests.mocks.mock_robot import MockRobot
 

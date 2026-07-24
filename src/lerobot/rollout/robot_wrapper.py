@@ -74,6 +74,50 @@ class ThreadSafeRobot:
         return self._robot.is_connected
 
     @property
+    def joint_limits_deg(self) -> tuple[list[float], list[float]] | None:
+        """Forward the wrapped robot's joint limits property (degrees)."""
+        return self._robot.joint_limits_deg
+
+    @property
+    def make_ee_chunk_smoother(self):
+        """EE chunk-smoother factory of the wrapped robot, or None.
+
+        Duck-typed capability (e.g. ``PiperEE``): the QP inference engines use
+        it to smooth Cartesian action chunks through joint space.  The factory
+        is pure construction — no hardware I/O — so no lock is needed.
+        """
+        return getattr(self._robot, "make_ee_chunk_smoother", None)
+
+    def urdf_q_from_observation(self, obs: dict[str, Any]) -> Any | None:
+        """Map an observation dict to URDF joint radians (None if unsupported).
+
+        Pure computation on an already-captured observation — no lock needed.
+        """
+        fn = getattr(self._robot, "urdf_q_from_observation", None)
+        return None if fn is None else fn(obs)
+
+    @property
+    def ee_pose_from_observation(self):
+        """FK (obs → ``ee.*`` pose dict) of the wrapped robot, or None.
+
+        Duck-typed capability (e.g. ``PiperFull``): the QP inference engines
+        use it to feed EE-state policies on joint-space robots.  Pure
+        computation on an already-captured observation — no lock needed.
+        """
+        return getattr(self._robot, "ee_pose_from_observation", None)
+
+    @property
+    def ee_anchor_q_from_observation(self):
+        """Joint anchor in the robot's EE-frame convention, or None.
+
+        When a robot's EE pipeline works in a frame other than the true URDF
+        one (e.g. ``PiperFull``'s signed frame), the qp engines must warm-start
+        the chunk IK from this anchor instead of ``urdf_q_from_observation``.
+        Pure computation — no lock needed.
+        """
+        return getattr(self._robot, "ee_anchor_q_from_observation", None)
+
+    @property
     def inner(self) -> Robot:
         """Access the underlying robot (e.g. for connect/disconnect)."""
         return self._robot
