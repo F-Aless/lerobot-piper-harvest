@@ -54,6 +54,12 @@ class PiperEEConfig(RobotConfig):
     # (see ``_hw_deg_to_urdf_rad``) — only to the observation vector and the
     # piper_full-side EE-policy bridge. Keep this in sync with
     # ``PiperFullConfig.dataset_joint_signs`` (same physical arm).
+    #
+    # [-1, 1, 1, -1, 1, -1] is specific to THIS repo's recording pipeline, NOT
+    # a property of the physical arm — see the longer note in
+    # ``config_piper_full.py``. Don't reuse it for a policy/dataset that came
+    # from a different recording setup or simulator without re-deriving it;
+    # default to [1, 1, 1, 1, 1, 1] (no inversion) when unverified.
     dataset_joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
 
     # --- Gripper (mm stroke; SDK native unit is 0.001 mm ticks) ---

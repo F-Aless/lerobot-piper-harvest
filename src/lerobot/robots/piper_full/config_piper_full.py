@@ -50,8 +50,19 @@ class PiperFullConfig(RobotConfig):
     # play: unit="pct" (below) and the EE-policy bridge
     # (`_q_signed_rad_to_action` / `ee_anchor_q_from_observation`). It is
     # NOT applied for unit="deg"/"rad" direct joint I/O — those expose the
-    # true hardware frame as-is. Do not rename/reuse this for anything
-    # outside that dataset convention.
+    # true hardware frame as-is, identically for "deg" and "rad" (this array
+    # is a single calibration constant, not something that varies with the
+    # numeric format). Do not rename/reuse this for anything outside that
+    # dataset convention.
+    #
+    # [-1, 1, 1, -1, 1, -1] is specific to THIS repo's recording pipeline
+    # (the SO-101→Piper teleop bridge / the *_ee checkpoints trained on data
+    # recorded through it) — it is NOT a property of the physical Piper arm.
+    # A policy/dataset coming from a different recording setup or simulator
+    # was very likely NOT mirrored the same way. Do not copy this value
+    # as-is for such a setup: re-derive it independently (command a known
+    # angle and compare sign against that setup's own convention), and when
+    # in doubt default to no inversion, i.e. [1, 1, 1, 1, 1, 1].
     dataset_joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
 
     # --- Normalization ---
