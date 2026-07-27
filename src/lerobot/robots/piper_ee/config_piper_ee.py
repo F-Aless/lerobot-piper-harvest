@@ -45,9 +45,16 @@ class PiperEEConfig(RobotConfig):
     # --- Piper firmware variant ---
     firmware: str = "v188"
 
-    # --- Joint conventions (URDF↔hardware sign alignment) ---
+    # --- Joint conventions ---
     joint_names: list[str] = field(default_factory=lambda: [f"joint_{i + 1}" for i in range(6)])
-    joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
+    # Per-joint sign flip (joints 1/4/6) between the true hw/URDF frame (what
+    # the SDK and the FK/IK solver use — see ``_hw_deg_to_urdf_rad``) and the
+    # mirrored "dataset" frame the recorded ``*_ee`` datasets/policies and the
+    # ``joint_{1..6}.pos`` observation fields use. It is NOT applied to FK/IK
+    # (see ``_hw_deg_to_urdf_rad``) — only to the observation vector and the
+    # piper_full-side EE-policy bridge. Keep this in sync with
+    # ``PiperFullConfig.dataset_joint_signs`` (same physical arm).
+    dataset_joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
 
     # --- Gripper (mm stroke; SDK native unit is 0.001 mm ticks) ---
     gripper_max_mm: float = 70.0
@@ -171,6 +178,7 @@ class PiperEEConfig(RobotConfig):
     # ------------------------------------------------------------------
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         if self.max_joint_step_rad is None:
             self.max_joint_step_rad = math.radians(self.v_max_deg_s / self.rate_hz)
         if self.free_yaw is not None:

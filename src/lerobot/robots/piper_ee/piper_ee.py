@@ -181,9 +181,9 @@ class PiperEE(Robot):
     def urdf_q_from_observation(self, obs: dict[str, Any]) -> np.ndarray | None:
         """Map an observation dict to URDF joint radians, or None if incomplete.
 
-        Observation joints are exported as ``hw_deg * joint_sign``; the URDF
-        frame is plain ``deg2rad(hw_deg)`` (see :meth:`_hw_deg_to_urdf_rad`),
-        so the sign is undone here.
+        Observation joints are exported as ``hw_deg * dataset_joint_signs``;
+        the URDF frame is plain ``deg2rad(hw_deg)`` (see
+        :meth:`_hw_deg_to_urdf_rad`), so the sign is undone here.
         """
         vals = []
         for i, name in enumerate(self.config.joint_names):
@@ -191,7 +191,7 @@ class PiperEE(Robot):
             v = obs.get(key)
             if not isinstance(v, (int, float)):
                 return None
-            vals.append(float(v) * self.config.joint_signs[i])
+            vals.append(float(v) * self.config.dataset_joint_signs[i])
         return np.deg2rad(np.asarray(vals, dtype=np.float64))
 
     # ------------------------------------------------------------------
@@ -233,6 +233,24 @@ class PiperEE(Robot):
         for cam in self.cameras.values():
             cam.disconnect()
         logger.info("[PiperEE] Disconnected")
+
+    def go_home_slow(self, *, speed_pct: int = 20, timeout_s: float = 8.0) -> None:
+        """Slowly home all joints to true (unmirrored) 0° — the generic safe
+        end-of-session pose, NOT "0" in any normalized/EE convention.  Mirrors
+        ``PiperFull.go_home_slow``; duck-typed by
+        ``rollout/strategies/core.py``'s teardown, which prefers this over
+        interpolating back to the connect-time pose when the robot exposes it.
+        """
+        self._require_sdk().go_home_slow(speed_pct=speed_pct, timeout_s=timeout_s)
+        # The commanded/seed joint state now jumped outside the IK-tracked
+        # path — drop it so the next send_action re-anchors from the
+        # measured (home) position instead of interpolating from stale state.
+        self._q_cmd_last = None
+        self._projector.reset()
+        # Also drop the last-known-good pose cache: if the very next
+        # get_observation/send_action hits a transient CAN read failure, fail
+        # loud instead of silently seeding from the pre-home pose.
+        self._last_joint_deg = None
 
     @property
     def is_calibrated(self) -> bool:
@@ -314,7 +332,7 @@ class PiperEE(Robot):
         pos, _R, rpy = self._ik.fk(q_urdf_rad)
 
         obs: dict[str, Any] = {
-            f"{name}.pos": joint_deg[i] * self.config.joint_signs[i]
+            f"{name}.pos": joint_deg[i] * self.config.dataset_joint_signs[i]
             for i, name in enumerate(self.config.joint_names)
         }
         obs["ee.x"] = float(pos[0])
@@ -496,9 +514,11 @@ class PiperEE(Robot):
 
         Empirically verified on the real arm (FK-vs-SDK consistency check at
         <1mm / <0.02°): the SDK reports joints already in the URDF frame.
-        The ``joint_signs`` field in ``piper_full`` is a
-        cosmetic rename of the *observation* vector, not a HW↔URDF transform,
-        so we do not apply it here.
+        ``dataset_joint_signs`` mirrors the *observation/action* vector into
+        the dataset-training frame (see ``config_piper_full.py`` and
+        ``get_observation``/``ee_anchor_q_from_observation`` for the
+        piper_full analog); it is not a HW↔URDF transform, so it is not
+        applied here — FK/IK always run in the true, unmirrored hw frame.
         """
         return np.deg2rad(np.asarray(joint_hw_deg, dtype=np.float64))
 
@@ -510,7 +530,7 @@ class PiperEE(Robot):
         sdk = self._require_sdk()
         min_deg, max_deg = sdk.joint_limits_deg
         oriented_min, oriented_max = [], []
-        for i, sign in enumerate(self.config.joint_signs):
+        for i, sign in enumerate(self.config.dataset_joint_signs):
             if sign >= 0:
                 oriented_min.append(min_deg[i])
                 oriented_max.append(max_deg[i])

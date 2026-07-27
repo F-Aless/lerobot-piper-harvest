@@ -99,17 +99,19 @@ class TestUnitRoundTrip:
         assert sdk.last_gripper_mm == pytest.approx(sdk.reported_gripper_mm, abs=1e-9)
 
     def test_deg_and_rad_observations_are_raw_angles(self):
+        """"deg"/"rad" are the TRUE hw/URDF frame: no ``dataset_joint_signs``
+        flip. Only "pct" (and the EE-policy bridge) use the mirrored dataset
+        frame — see ``config_piper_full.py``."""
         robot_deg, sdk = _robot(unit="deg")
-        signs = robot_deg.config.joint_signs
         obs_deg = robot_deg.get_observation()
         for i, key in enumerate(JOINT_KEYS):
-            assert obs_deg[key] == pytest.approx(sdk.reported_joint_deg[i] * signs[i])
+            assert obs_deg[key] == pytest.approx(sdk.reported_joint_deg[i])
         assert obs_deg["gripper.pos"] == pytest.approx(sdk.reported_gripper_mm)
 
         robot_rad, sdk_rad = _robot(unit="rad")
         obs_rad = robot_rad.get_observation()
         for i, key in enumerate(JOINT_KEYS):
-            assert obs_rad[key] == pytest.approx(math.radians(sdk_rad.reported_joint_deg[i] * signs[i]))
+            assert obs_rad[key] == pytest.approx(math.radians(sdk_rad.reported_joint_deg[i]))
 
 
 class TestRawUnitSafetyClamps:
@@ -135,3 +137,40 @@ class TestRawUnitSafetyClamps:
         # pct is clamped to +100, which maps exactly onto the oriented limit.
         for hw, lo, hi in zip(sdk.last_joints_deg, LIM_MIN, LIM_MAX, strict=True):
             assert lo - 1e-9 <= hw <= hi + 1e-9
+
+
+class TestEEBridgeUnitInvariance:
+    """The EE-policy bridge (``ee_anchor_q_from_observation`` /
+    ``_q_signed_rad_to_action``) always works in the mirrored dataset frame
+    (``dataset_joint_signs`` applied), regardless of ``config.unit`` — only
+    the plain ``get_observation``/``send_action`` numeric format changes with
+    ``unit``. A regression here would silently send an *_ee-trained policy's
+    actions to the wrong (unmirrored) joints whenever unit != "pct"."""
+
+    def test_anchor_q_same_across_units(self):
+        signs = np.array(PiperFullConfig().dataset_joint_signs, dtype=np.float64)
+        expected_rad = np.deg2rad(np.array(FakeSDK().reported_joint_deg) * signs)
+
+        for unit in ("pct", "deg", "rad"):
+            robot, _ = _robot(unit=unit)
+            obs = robot.get_observation()
+            q_anchor = robot.ee_anchor_q_from_observation(obs)
+            assert q_anchor == pytest.approx(expected_rad, abs=1e-6), f"unit={unit}"
+
+    def test_signed_rad_to_action_round_trips_to_same_hw_command(self):
+        # Same mirrored-frame anchor, mapped to each unit's action format and
+        # sent — all three must land on the identical true hw-frame command.
+        signs = np.array(PiperFullConfig().dataset_joint_signs, dtype=np.float64)
+        q_anchor_rad = np.deg2rad(np.array(FakeSDK().reported_joint_deg) * signs)
+
+        commands = {}
+        for unit in ("pct", "deg", "rad"):
+            robot, sdk = _robot(unit=unit)
+            action_vals = robot._q_signed_rad_to_action(q_anchor_rad)
+            action = {key: float(v) for key, v in zip(JOINT_KEYS, action_vals, strict=True)}
+            robot.send_action({**action, "gripper.pos": sdk.reported_gripper_mm})
+            commands[unit] = list(sdk.last_joints_deg)
+
+        assert commands["pct"] == pytest.approx(commands["deg"], abs=1e-6)
+        assert commands["pct"] == pytest.approx(commands["rad"], abs=1e-6)
+        assert commands["pct"] == pytest.approx(FakeSDK().reported_joint_deg, abs=1e-6)

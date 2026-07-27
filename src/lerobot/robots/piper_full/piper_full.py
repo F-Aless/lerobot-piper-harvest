@@ -190,13 +190,12 @@ class PiperFull(Robot):
         if unit == "pct":
             oriented_min, oriented_max = self._oriented_joint_limits_deg()
             for i, name in enumerate(self.config.joint_names):
-                signed_deg = joint_deg[i] * self.config.joint_signs[i]
+                signed_deg = joint_deg[i] * self.config.dataset_joint_signs[i]
                 obs[f"{name}.pos"] = self._deg_to_pct(signed_deg, oriented_min[i], oriented_max[i])
             obs["gripper.pos"] = self._mm_to_pct(gripper_mm)
-        else:  # "deg" | "rad" — raw signed angles, gripper in mm
+        else:  # "deg" | "rad" — TRUE hw/URDF-frame angles, no sign, gripper in mm
             for i, name in enumerate(self.config.joint_names):
-                signed_deg = joint_deg[i] * self.config.joint_signs[i]
-                obs[f"{name}.pos"] = signed_deg if unit == "deg" else math.radians(signed_deg)
+                obs[f"{name}.pos"] = joint_deg[i] if unit == "deg" else math.radians(joint_deg[i])
             obs["gripper.pos"] = gripper_mm
 
         obs["gripper.tau"] = self._tau_filtered
@@ -240,9 +239,9 @@ class PiperFull(Robot):
             for i, name in enumerate(self.config.joint_names):
                 pct = max(-100.0, min(100.0, float(action[f"{name}.pos"])))
                 signed_deg = self._pct_to_deg(pct, oriented_min[i], oriented_max[i])
-                hw_joints_deg.append(signed_deg * self.config.joint_signs[i])
+                hw_joints_deg.append(signed_deg * self.config.dataset_joint_signs[i])
             gripper_mm = self._pct_to_mm(float(action["gripper.pos"])) if "gripper.pos" in action else None
-        else:  # "deg" | "rad" — raw signed angles, gripper in mm
+        else:  # "deg" | "rad" — TRUE hw/URDF-frame angles, no sign, gripper in mm
             # Clamp to the SDK joint limits: the pct path clamps implicitly
             # (±100 maps onto the exact limits), the raw-angle path must not
             # rely on the firmware alone.
@@ -250,8 +249,7 @@ class PiperFull(Robot):
             hw_joints_deg = []
             for i, name in enumerate(self.config.joint_names):
                 value = float(action[f"{name}.pos"])
-                signed_deg = value if unit == "deg" else math.degrees(value)
-                hw_deg = signed_deg * self.config.joint_signs[i]
+                hw_deg = value if unit == "deg" else math.degrees(value)
                 hw_joints_deg.append(min(max(hw_deg, lim_min[i]), lim_max[i]))
             # Clamp to the physical stroke: the pct path clamps implicitly via
             # _pct_to_mm, the raw-mm path must not forward out-of-range targets.
@@ -350,21 +348,26 @@ class PiperFull(Robot):
         return self._ee_kinematics
 
     def _q_signed_rad_to_action(self, q_rad: np.ndarray) -> np.ndarray:
-        """EE-frame (signed) radians → this robot's joint action unit.
+        """EE-frame (dataset/mirrored, signed) radians → this robot's joint action unit.
 
-        Counterpart of ``ee_anchor_q_from_observation``: no sign flip — the
-        signed angles ARE the action convention, mapped to ``config.unit``
-        (pct through the oriented limits, degrees, or radians).
-        ``send_action`` then undoes the signs toward the SDK, which lands the
-        physical arm on the mirror of the EE-frame pose — i.e. exactly the
-        pose the ``*_ee``-trained policy intended.
+        Counterpart of ``ee_anchor_q_from_observation``. The input ``q_rad``
+        is always in the mirrored dataset frame (what the ``*_ee`` policy was
+        trained on), independent of ``config.unit`` — ``unit`` only picks the
+        *numeric format* of the output:
+          - "pct": mapped through the oriented (sign-aware) limits — ``send_action``
+            re-applies ``dataset_joint_signs`` for this branch, so no sign is
+            applied here.
+          - "deg"/"rad": ``send_action`` is a true hw-frame passthrough for these
+            units (no sign applied there), so the sign must be undone HERE
+            instead, to still land the physical arm on the intended mirrored pose.
         """
         q_rad = np.asarray(q_rad, dtype=np.float64)
+        signs = np.asarray(self.config.dataset_joint_signs, dtype=np.float64)
         if self.config.unit == "rad":
-            return q_rad
+            return q_rad * signs
         signed_deg = np.degrees(q_rad)
         if self.config.unit == "deg":
-            return signed_deg
+            return signed_deg * signs
         omin, omax = self._oriented_joint_limits_deg()
         omin = np.asarray(omin, dtype=np.float64)
         omax = np.asarray(omax, dtype=np.float64)
@@ -373,16 +376,22 @@ class PiperFull(Robot):
         return np.clip(pct, -100.0, 100.0)
 
     def ee_anchor_q_from_observation(self, obs: dict[str, Any]) -> np.ndarray | None:
-        """Observation joint values → radians in the EE-convention (signed) frame.
+        """Observation joint values → radians in the EE-convention (mirrored, signed) frame.
 
         The ``*_ee`` datasets were generated by running FK directly on the
-        signed observation degrees — ``joint_signs`` NOT undone (verified to
-        zero error against the ``_real``/``_real_ee`` pair).  Negating joints
-        1/4/6 mirrors the pose across the xz-plane, so this frame is a
-        mirrored twin of the physical arm; those joints have symmetric limits,
-        hence the same URDF model and limits apply.  The entire engine-side EE
-        path (state FK, IK anchor, chunk smoothing) works in this frame and
-        ``_q_signed_rad_to_action`` maps its joints back to robot actions.
+        mirrored/signed joint values — ``dataset_joint_signs`` applied, NOT
+        undone (verified to zero error against the ``_real``/``_real_ee``
+        pair).  Negating joints 1/4/6 mirrors the pose across the xz-plane,
+        so this frame is a mirrored twin of the physical arm; those joints
+        have symmetric limits, hence the same URDF model and limits apply.
+        The entire engine-side EE path (state FK, IK anchor, chunk smoothing)
+        works in this frame and ``_q_signed_rad_to_action`` maps its joints
+        back to robot actions.
+
+        ``obs[f"{name}.pos"]`` is already in this mirrored frame for
+        unit="pct" (``get_observation`` applies the sign there), but is the
+        TRUE hw/URDF frame for unit="deg"/"rad" (no sign applied there) — so
+        the sign must be applied HERE for those two units instead.
         """
         vals = []
         for name in self.config.joint_names:
@@ -392,26 +401,29 @@ class PiperFull(Robot):
             vals.append(float(v))
         values = np.asarray(vals, dtype=np.float64)
         unit = self.config.unit
+        signs = np.asarray(self.config.dataset_joint_signs, dtype=np.float64)
         if unit == "rad":
-            return values
+            return values * signs
         if unit == "pct":
             omin, omax = self._oriented_joint_limits_deg()
             omin = np.asarray(omin, dtype=np.float64)
             omax = np.asarray(omax, dtype=np.float64)
             values = omin + (values + 100.0) / 200.0 * (omax - omin)
-        return np.deg2rad(values)
+            return np.deg2rad(values)
+        # "deg": true hw-frame degrees — apply the sign, then convert.
+        return np.deg2rad(values * signs)
 
     def urdf_q_from_observation(self, obs: dict[str, Any]) -> np.ndarray | None:
         """Map an observation dict to URDF joint radians, or None if incomplete.
 
-        Inverse of the observation convention: pct → signed degrees (through
-        the oriented limits) for unit="pct", then the sign is
-        undone and degrees become radians.
+        Inverse of the observation convention: reconstructs the mirrored
+        dataset-frame radians via ``ee_anchor_q_from_observation`` (valid for
+        any ``unit``), then undoes the sign to land in the true URDF frame.
         """
         q_signed = self.ee_anchor_q_from_observation(obs)
         if q_signed is None:
             return None
-        signs = np.asarray(self.config.joint_signs, dtype=np.float64)
+        signs = np.asarray(self.config.dataset_joint_signs, dtype=np.float64)
         return q_signed * signs
 
     def ee_pose_from_observation(self, obs: dict[str, Any]) -> dict[str, float] | None:
@@ -460,7 +472,7 @@ class PiperFull(Robot):
         min_deg, max_deg = sdk.joint_limits_deg
         oriented_min: list[float] = []
         oriented_max: list[float] = []
-        for i, sign in enumerate(self.config.joint_signs):
+        for i, sign in enumerate(self.config.dataset_joint_signs):
             if sign >= 0:
                 oriented_min.append(min_deg[i])
                 oriented_max.append(max_deg[i])

@@ -40,14 +40,31 @@ class PiperFullConfig(RobotConfig):
 
     # --- Arm kinematics ---
     joint_names: list[str] = field(default_factory=lambda: [f"joint_{i + 1}" for i in range(6)])
-    joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
+    # Per-joint sign flip (joints 1/4/6) between two frames:
+    #   * true hardware/URDF frame — what the SDK reports/expects, and what
+    #     the FK/IK solver operates in (empirically verified zero-transform,
+    #     see `PiperEE._hw_deg_to_urdf_rad`).
+    #   * the mirrored "dataset" frame all recorded datasets, the teleop
+    #     bridge (`so_leader_piper`) and the *_ee policy checkpoints use.
+    # This sign ONLY applies where that dataset/training convention is in
+    # play: unit="pct" (below) and the EE-policy bridge
+    # (`_q_signed_rad_to_action` / `ee_anchor_q_from_observation`). It is
+    # NOT applied for unit="deg"/"rad" direct joint I/O — those expose the
+    # true hardware frame as-is. Do not rename/reuse this for anything
+    # outside that dataset convention.
+    dataset_joint_signs: list[int] = field(default_factory=lambda: [-1, 1, 1, -1, 1, -1])
 
     # --- Normalization ---
     # Joint angle unit of observations/actions:
-    #   "pct" — normalized to [-100, 100] through the oriented joint limits
-    #           (the convention all our datasets/policies were trained with)
-    #   "deg" — signed degrees, gripper.pos in mm
-    #   "rad" — signed radians, gripper.pos in mm
+    #   "pct" — normalized to [-100, 100] through the oriented joint limits,
+    #           in the MIRRORED dataset frame (`dataset_joint_signs` applied).
+    #           This is the convention all our datasets/policies were
+    #           trained with, and what the teleop bridge produces.
+    #   "deg" — TRUE hardware/URDF-frame signed degrees, gripper.pos in mm.
+    #           No sign flip: direct passthrough to/from the SDK, for
+    #           debugging or driving the arm without a teleop/dataset in
+    #           the loop.
+    #   "rad" — same as "deg", in radians.
     # None derives the unit from the legacy ``use_degrees`` flag.
     # WARNING: only "pct" has been validated on the real arm; "deg" and "rad"
     # are implemented but NOT hardware-tested.
