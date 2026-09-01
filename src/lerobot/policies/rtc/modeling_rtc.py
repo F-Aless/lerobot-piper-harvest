@@ -210,8 +210,12 @@ class RTCProcessor:
         )
 
         with torch.enable_grad():
-            v_t = original_denoise_step_partial(x_t)
+            # requires_grad_ must be set BEFORE the forward pass, or v_t carries no graph:
+            # d(x_t - time*v_t)/d x_t collapses to the identity and torch.autograd.grad
+            # returns grad_outputs unchanged, so the vector-Jacobian product of Eq. 2 in
+            # Black et al. degenerates into plain per-tick proportional feedback.
             x_t.requires_grad_(True)
+            v_t = original_denoise_step_partial(x_t)
 
             x1_t = x_t - time * v_t  # noqa: N806
             err = (prev_chunk_left_over - x1_t) * weights
